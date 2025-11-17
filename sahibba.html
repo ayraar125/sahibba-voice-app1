@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice-Guided Sahibba (NFC)</title>
+    <style>
+        /* Basic styles for mobile visibility */
+        body { font-family: sans-serif; padding: 20px; background-color: #f0f0f5; }
+        .container { max-width: 400px; margin: 0 auto; text-align: center; }
+        h1 { color: #333; }
+        .status-box { background-color: #fff; border: 2px solid #007bff; padding: 15px; border-radius: 10px; margin-bottom: 20px; }
+        #currentWordDisplay { font-size: 3em; font-weight: bold; margin-top: 10px; min-height: 1.5em; }
+        #voiceStatus { background-color: #ffeb3b; padding: 10px; border-radius: 5px; color: #333; font-weight: bold; }
+        .note { margin-top: 20px; font-size: 0.9em; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔊 NFC Sahibba Prototype</h1>
+        <div class="status-box">
+            <h2>Current Word Placed:</h2>
+            <div id="currentWordDisplay">--</div>
+        </div>
+        <div id="voiceStatus">Ready. Scan a tile!</div>
+        <div class="note">
+            <p><strong>URL Data Received:</strong> <span id="urlDataReceived">Waiting for scan...</span></p>
+            <p>Game is played by scanning programmed NFC tags.</p>
+        </div>
+    </div>
+<script>
+    // --- CONFIGURATION ---
+    let currentWord = [];
+    const validWords = ['BUKU', 'BACA']; // Your PoC database
+    const VOWELS = ['A', 'E', 'I', 'O', 'U'];
+    const synth = window.speechSynthesis;
+    const wordDisplay = document.getElementById('currentWordDisplay');
+    const voiceStatus = document.getElementById('voiceStatus');
+    const urlDataDisplay = document.getElementById('urlDataReceived');
+
+    // --- UTILITIES ---
+
+    // Function to read parameters (tile=X or action=Y) from the URL
+    function getURLParameter(name) {
+        // NOTE: This is how the code reads the letter/action from the NFC tag data.
+        name = name.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
+        const regex = new RegExp('[\\?&]' + name + '=([^&#]*)');
+        const results = regex.exec(location.search);
+        return results === null ? '' : decodeURIComponent(results[1].replace(/\+/g, ' ')).toUpperCase();
+    }
+
+    // Text-to-Speech function
+    function speak(text, isValidation = false) {
+        if (synth.speaking) {
+            synth.cancel();
+        }
+        if (text) {
+            const utterance = new SpeechSynthesisUtterance(text);
+            
+            // CRITICAL: Set language to Indonesian/Malay (id-ID) for correct vowel pronunciation (e.g., 'BU' as 'boo')
+            if (!isValidation) {
+                 utterance.lang = 'id-ID'; 
+            } else {
+                 // Use English for clear instruction/validation sentences
+                 utterance.lang = 'en-US'; 
+            }
+            utterance.rate = 0.9;
+            voiceStatus.textContent = `Voicing: "${text}"`;
+
+            utterance.onend = () => {
+                voiceStatus.textContent = "Ready. Scan the next tile!";
+            };
+
+            synth.speak(utterance);
+        }
+    }
+
+    function updateDisplay() {
+        wordDisplay.textContent = currentWord.length > 0 ? currentWord.join('') : '--';
+    }
+
+    // --- GAME LOGIC FUNCTIONS ---
+
+    // Called when a tile (e.g., 'B', 'U') is scanned
+    function processTile(letter) {
+        currentWord.push(letter);
+        updateDisplay();
+        
+        const currentLength = currentWord.length;
+        const lastLetter = currentWord[currentLength - 1];
+        
+        // Syllable Voice Logic (e.g., BU, BA)
+        if (currentLength >= 2) {
+            const secondLastLetter = currentWord[currentLength - 2];
+            const isLastVowel = VOWELS.includes(lastLetter);
+            const isSecondLastConsonant = !VOWELS.includes(secondLastLetter);
+
+            if (isSecondLastConsonant && isLastVowel) {
+                const syllable = secondLastLetter + lastLetter;
+                speak(syllable);
+            } else {
+                // If not a CV pair, just voice the letter name
+                speak(lastLetter);
+            }
+        } else {
+            // First letter placed
+            speak(lastLetter);
+        }
+        
+        console.log(`Tile Placed: ${letter}. Current Word: ${currentWord.join('')}`);
+    }
+
+    // Called when the 'End Turn' tile is scanned
+    function validateWord() {
+        if (currentWord.length === 0) {
+            speak("Please place tiles before ending your turn.", true);
+            return;
+        }
+
+        const placedWord = currentWord.join('');
+        const isWordValid = validWords.includes(placedWord);
+
+        if (isWordValid) {
+            const speech = `Word detected: ${placedWord}. Word is correct! You scored points.`;
+            speak(speech, true);
+            wordDisplay.style.color = 'green';
+        } else {
+            const speech = `${placedWord}. Invalid word. Please remove tiles and try again.`;
+            speak(speech, true);
+            wordDisplay.style.color = 'red';
+        }
+
+        // Reset the state after a delay
+        setTimeout(() => {
+            currentWord = [];
+            updateDisplay();
+            wordDisplay.style.color = '#007bff';
+        }, 5000); 
+
+        console.log(`Validation Check: ${placedWord}. Valid: ${isWordValid}`);
+    }
+
+    // --- INITIALIZATION: Where the magic starts ---
+    function initializeApp() {
+        updateDisplay();
+        
+        const tileData = getURLParameter('TILE');
+        const actionData = getURLParameter('ACTION');
+
+        // Display the received data for confirmation
+        if (tileData || actionData) {
+             urlDataDisplay.textContent = `Tile: ${tileData || 'N/A'}, Action: ${actionData || 'N/A'}`;
+        }
+
+        // 1. Process Tile Data (Letter scanned)
+        if (tileData && tileData.length === 1 && VOWELS.includes(tileData) || !VOWELS.includes(tileData)) {
+            processTile(tileData);
+        } 
+        // 2. Process Action Data (Validate scanned)
+        else if (actionData === 'VALIDATE') {
+            validateWord();
+        } 
+        // 3. No specific action
+        else {
+            speak("Welcome. Please scan your first tile.", true);
+        }
+    }
+
+    // Start the application when the page loads
+    window.onload = initializeApp;
+</script>
+    </body>
+</html>
